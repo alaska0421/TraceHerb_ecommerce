@@ -101,8 +101,11 @@ function AuthModal({mode,setMode,user,onClose,onAuth,onLogout}:{mode:"login"|"re
     try{
       const body=mode==="register"?{username:form.username,email:form.email,phone:form.phone,password:form.password}:{account:form.account,password:form.password};
       const res=await fetch(`/api/auth/${mode}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-      const data=await res.json();
+      const text=await res.text();
+      let data:{user?:User;error?:string};
+      try{data=JSON.parse(text)}catch{throw new Error("服务器返回异常，请稍后重试")}
       if(!res.ok)throw new Error(data.error||"操作失败，请稍后重试");
+      if(!data.user)throw new Error("登录信息返回异常，请稍后重试");
       onAuth(data.user);
     }catch(e){setError(e instanceof Error?e.message:"操作失败，请稍后重试")}finally{setLoading(false)}
   };

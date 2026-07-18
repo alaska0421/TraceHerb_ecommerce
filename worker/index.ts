@@ -48,7 +48,7 @@ async function sha256(value:string){
 }
 async function hashPassword(password:string,salt:string){
   const key=await crypto.subtle.importKey("raw",encoder.encode(password),"PBKDF2",false,["deriveBits"]);
-  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt:encoder.encode(salt),iterations:120000},key,256);
+  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt:encoder.encode(salt),iterations:100000},key,256);
   return bytesToHex(new Uint8Array(bits));
 }
 function safeEqual(a:string,b:string){
@@ -159,7 +159,14 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if(url.pathname.startsWith("/api/")) return api(request,env,url);
+    if(url.pathname.startsWith("/api/")){
+      try{
+        return await api(request,env,url);
+      }catch(error){
+        console.error("API request failed",error);
+        return Response.json({error:"服务器暂时无法处理请求，请稍后重试"},{status:500,headers:{"cache-control":"no-store"}});
+      }
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

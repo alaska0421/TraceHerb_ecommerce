@@ -46,7 +46,7 @@ export default function Home() {
   const checkin=()=>{if(checked)return notify("今天已经签到过啦","warn");setChecked(true);setPoints(p=>p+20);notify("签到成功，获得 20 健康积分");fetch("/api/checkin",{method:"POST"}).catch(()=>{})};
   const redeem=(cost:number,name:string)=>{if(points<cost)return notify("积分不足","warn");setPoints(p=>p-cost);notify(`已兑换：${name}`)};
   const requireAuth=(action:()=>void)=>{if(user)return action();setAuthMode("login");setAuthOpen(true);notify("请先登录后继续","warn")};
-  const logout=async()=>{await fetch("/api/auth/logout",{method:"POST"});setUser(null);setAuthOpen(false);notify("已安全退出登录")};
+  const logout=async()=>{await fetch("/api/auth/logout",{method:"POST"});setUser(null);setView("shop");setAuthOpen(false);notify("已安全退出登录")};
 
   return <main>
     {toast&&<div className={`toast ${toast.kind}`}>{toast.kind==="warn"?"!":"✓"} {toast.text}</div>}

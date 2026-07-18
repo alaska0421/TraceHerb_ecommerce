@@ -11,7 +11,16 @@ export const products = sqliteTable("products", {
 export const orders = sqliteTable("orders", {
   id: text("id").primaryKey(), amount: real("amount").notNull(),
   itemsJson: text("items_json").notNull(), status: text("status").notNull().default("待发货"),
-  createdAt: text("created_at").notNull(),
+  createdAt: text("created_at").notNull(), userId: integer("user_id"),
+  paymentMethod: text("payment_method"), transactionId: text("transaction_id"),
+  paidAt: text("paid_at"),
+});
+export const paymentTransactions = sqliteTable("payment_transactions", {
+  id: text("id").primaryKey(), orderId: text("order_id").notNull(),
+  userId: integer("user_id").notNull(), username: text("username").notNull(),
+  method: text("method").notNull(), amount: real("amount").notNull(),
+  status: text("status").notNull(), environment: text("environment").notNull().default("sandbox"),
+  createdAt: text("created_at").notNull(), paidAt: text("paid_at"),
 });
 export const pointEvents = sqliteTable("point_events", {
   id: integer("id").primaryKey({ autoIncrement: true }), userKey: text("user_key").notNull(),

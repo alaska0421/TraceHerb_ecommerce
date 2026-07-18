@@ -31,6 +31,7 @@ async function ensureDb(db:D1Database){
   await db.batch([
     db.prepare("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT NOT NULL,origin TEXT NOT NULL,price REAL NOT NULL,stock INTEGER NOT NULL DEFAULT 0,sales INTEGER NOT NULL DEFAULT 0,rating REAL NOT NULL DEFAULT 5,trace_code TEXT NOT NULL UNIQUE,badge TEXT NOT NULL,description TEXT NOT NULL,icon TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY,amount REAL NOT NULL,items_json TEXT NOT NULL,status TEXT NOT NULL DEFAULT '待发货',created_at TEXT NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS payment_transactions (id TEXT PRIMARY KEY,order_id TEXT NOT NULL,user_id INTEGER NOT NULL,username TEXT NOT NULL,method TEXT NOT NULL,amount REAL NOT NULL,status TEXT NOT NULL,environment TEXT NOT NULL DEFAULT 'sandbox',created_at TEXT NOT NULL,paid_at TEXT)"),
     db.prepare("CREATE TABLE IF NOT EXISTS point_events (id INTEGER PRIMARY KEY AUTOINCREMENT,user_key TEXT NOT NULL,kind TEXT NOT NULL,delta INTEGER NOT NULL,created_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT NOT NULL UNIQUE,email TEXT NOT NULL UNIQUE,phone TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,password_salt TEXT NOT NULL,points INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY,user_id INTEGER NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)"),
@@ -40,7 +41,17 @@ async function ensureDb(db:D1Database){
   if(!roleColumn)await db.prepare("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'buyer'").run();
   const eventDateColumn=await db.prepare("SELECT name FROM pragma_table_info('point_events') WHERE name='event_date'").first();
   if(!eventDateColumn)await db.prepare("ALTER TABLE point_events ADD COLUMN event_date TEXT").run();
+  for(const [name,sql] of [
+    ["user_id","ALTER TABLE orders ADD COLUMN user_id INTEGER"],
+    ["payment_method","ALTER TABLE orders ADD COLUMN payment_method TEXT"],
+    ["transaction_id","ALTER TABLE orders ADD COLUMN transaction_id TEXT"],
+    ["paid_at","ALTER TABLE orders ADD COLUMN paid_at TEXT"],
+  ]){
+    const column=await db.prepare("SELECT name FROM pragma_table_info('orders') WHERE name=?").bind(name).first();
+    if(!column)await db.prepare(sql).run();
+  }
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS point_events_daily_unique ON point_events(user_key,kind,event_date)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS payment_transactions_created_at_idx ON payment_transactions(created_at)").run();
   const count=await db.prepare("SELECT COUNT(*) n FROM products").first<{n:number}>();
   if(!count?.n) await db.batch(seedProducts.map(p=>db.prepare("INSERT INTO products VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(...p)));
 }
@@ -158,10 +169,58 @@ async function api(request:Request,env:Env,url:URL){
     await env.DB.prepare("DELETE FROM products WHERE id=?").bind(id).run();
     return json({ok:true});
   }
-  if(url.pathname==="/api/orders"&&request.method==="POST"){
-    const o=await request.json() as {id:string;amount:number;items:unknown[]};
-    await env.DB.prepare("INSERT INTO orders(id,amount,items_json,status,created_at) VALUES(?,?,?,?,?)").bind(o.id,o.amount,JSON.stringify(o.items),"待发货",new Date().toISOString()).run();
-    return json({ok:true},201);
+  if(url.pathname==="/api/orders"&&request.method==="GET"){
+    const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
+    if(!user||user.role!=="buyer")return json({error:"请使用买家账户登录"},403);
+    const rows=await env.DB.prepare("SELECT id,amount,items_json itemsJson,status,created_at createdAt,payment_method paymentMethod,transaction_id transactionId FROM orders WHERE user_id=? ORDER BY created_at DESC")
+      .bind(user.id).all();
+    return json(rows.results.map((row:Record<string,unknown>)=>({...row,items:JSON.parse(String(row.itemsJson||"[]"))})));
+  }
+  if(url.pathname==="/api/payments/sandbox"&&request.method==="POST"){
+    const user=await currentUser(request,env.DB) as {id?:number;username?:string;role?:string}|null;
+    if(!user||user.role!=="buyer")return json({error:"请使用买家账户登录后支付"},403);
+    const body=await request.json() as {orderId?:string;items?:Array<{id?:number;qty?:number}>;method?:string};
+    const method=body.method==="wechat_mock"?"wechat_mock":body.method==="alipay_sandbox"?"alipay_sandbox":"";
+    if(!method)return json({error:"请选择支付宝沙箱或微信模拟支付"},400);
+    if(!body.orderId||!Array.isArray(body.items)||!body.items.length)return json({error:"订单信息不完整"},400);
+    const normalized=body.items.map(item=>({id:Number(item.id),qty:Number(item.qty)}));
+    if(normalized.some(item=>!Number.isInteger(item.id)||!Number.isInteger(item.qty)||item.qty<1||item.qty>99))return json({error:"商品数量无效"},400);
+    const productRows=await env.DB.batch(normalized.map(item=>env.DB.prepare("SELECT id,name,price,stock FROM products WHERE id=?").bind(item.id)));
+    if(productRows.some(result=>!result.results[0]))return json({error:"订单中包含已下架商品"},409);
+    let amount=0;
+    const storedItems=normalized.map((item,index)=>{
+      const product=productRows[index].results[0] as Record<string,unknown>;
+      if(Number(product.stock)<item.qty)throw new Error(`${String(product.name)}库存不足`);
+      amount+=Number(product.price)*item.qty;
+      return {id:item.id,name:String(product.name),price:Number(product.price),qty:item.qty};
+    });
+    amount=Number(amount.toFixed(2));
+    const transactionId=`${method==="alipay_sandbox"?"ALI":"WX"}-SBX-${Date.now()}-${randomHex(3).toUpperCase()}`;
+    const now=new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO orders(id,amount,items_json,status,created_at,user_id,payment_method,transaction_id,paid_at) VALUES(?,?,?,?,?,?,?,?,?)")
+        .bind(body.orderId,amount,JSON.stringify(storedItems),"待发货",now,user.id,method,transactionId,now),
+      env.DB.prepare("INSERT INTO payment_transactions(id,order_id,user_id,username,method,amount,status,environment,created_at,paid_at) VALUES(?,?,?,?,?,?,'支付成功','sandbox',?,?)")
+        .bind(transactionId,body.orderId,user.id,user.username,method,amount,now,now),
+      env.DB.prepare("UPDATE users SET points=points+? WHERE id=?").bind(Math.floor(amount),user.id),
+      ...normalized.map(item=>env.DB.prepare("UPDATE products SET stock=stock-?,sales=sales+? WHERE id=? AND stock>=?").bind(item.qty,item.qty,item.id,item.qty)),
+    ]);
+    const balance=await env.DB.prepare("SELECT points FROM users WHERE id=?").bind(user.id).first<{points:number}>();
+    return json({ok:true,orderId:body.orderId,transactionId,status:"支付成功",points:balance?.points||0,paidAt:now},201);
+  }
+  if(url.pathname==="/api/admin/transactions"&&request.method==="GET"){
+    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    if(user?.role!=="admin")return json({error:"仅管理员可查看支付流水"},403);
+    const rows=await env.DB.prepare("SELECT id,order_id orderId,username,method,amount,status,environment,created_at createdAt,paid_at paidAt FROM payment_transactions ORDER BY created_at DESC").all();
+    if(url.searchParams.get("format")==="csv"){
+      const escape=(value:unknown)=>`"${String(value??"").replace(/"/g,'""')}"`;
+      const labels:Record<string,string>={alipay_sandbox:"支付宝沙箱",wechat_mock:"微信模拟支付"};
+      const lines=["流水号,订单号,买家,支付方式,金额,状态,环境,创建时间,支付时间",...rows.results.map((r:Record<string,unknown>)=>[
+        r.id,r.orderId,r.username,labels[String(r.method)]||r.method,Number(r.amount).toFixed(2),r.status,"沙箱",r.createdAt,r.paidAt,
+      ].map(escape).join(","))];
+      return new Response("\uFEFF"+lines.join("\r\n"),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":`attachment; filename="traceherb-transactions-${new Date().toISOString().slice(0,10)}.csv"`,"cache-control":"no-store"}});
+    }
+    return json(rows.results);
   }
   if(url.pathname==="/api/checkin"&&request.method==="GET"){
     const user=await currentUser(request,env.DB) as {id?:number;role?:string;points?:number}|null;

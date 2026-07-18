@@ -6,8 +6,16 @@ CREATE TABLE IF NOT EXISTS products (
 );
 CREATE TABLE IF NOT EXISTS orders (
  id TEXT PRIMARY KEY, amount REAL NOT NULL, items_json TEXT NOT NULL,
- status TEXT NOT NULL DEFAULT '待发货', created_at TEXT NOT NULL
+ status TEXT NOT NULL DEFAULT '待发货', created_at TEXT NOT NULL,
+ user_id INTEGER, payment_method TEXT, transaction_id TEXT, paid_at TEXT
 );
+CREATE TABLE IF NOT EXISTS payment_transactions (
+ id TEXT PRIMARY KEY, order_id TEXT NOT NULL, user_id INTEGER NOT NULL,
+ username TEXT NOT NULL, method TEXT NOT NULL, amount REAL NOT NULL,
+ status TEXT NOT NULL, environment TEXT NOT NULL DEFAULT 'sandbox',
+ created_at TEXT NOT NULL, paid_at TEXT
+);
+CREATE INDEX IF NOT EXISTS payment_transactions_created_at_idx ON payment_transactions(created_at);
 CREATE TABLE IF NOT EXISTS point_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT, user_key TEXT NOT NULL, kind TEXT NOT NULL,
  delta INTEGER NOT NULL, created_at TEXT NOT NULL, event_date TEXT

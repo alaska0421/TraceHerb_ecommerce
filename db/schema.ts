@@ -25,6 +25,7 @@ export const users = sqliteTable("users", {
   passwordHash: text("password_hash").notNull(),
   passwordSalt: text("password_salt").notNull(),
   points: integer("points").notNull().default(0),
+  role: text("role").notNull().default("buyer"),
   createdAt: text("created_at").notNull(),
 });
 export const sessions = sqliteTable("sessions", {

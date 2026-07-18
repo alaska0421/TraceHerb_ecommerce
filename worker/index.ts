@@ -5,6 +5,10 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  ADMIN_USERNAME?: string;
+  ADMIN_EMAIL?: string;
+  ADMIN_PHONE?: string;
+  ADMIN_PASSWORD?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -32,6 +36,8 @@ async function ensureDb(db:D1Database){
     db.prepare("CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY,user_id INTEGER NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)"),
     db.prepare("CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id)"),
   ]);
+  const roleColumn=await db.prepare("SELECT name FROM pragma_table_info('users') WHERE name='role'").first();
+  if(!roleColumn)await db.prepare("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'buyer'").run();
   const count=await db.prepare("SELECT COUNT(*) n FROM products").first<{n:number}>();
   if(!count?.n) await db.batch(seedProducts.map(p=>db.prepare("INSERT INTO products VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(...p)));
 }
@@ -64,23 +70,33 @@ function cookieValue(request:Request,name:string){
 async function currentUser(request:Request,db:D1Database){
   const token=cookieValue(request,"traceherb_session");
   if(!token)return null;
-  return db.prepare("SELECT u.id,u.username,u.email,u.phone,u.points FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?")
+  return db.prepare("SELECT u.id,u.username,u.email,u.phone,u.points,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?")
     .bind(await sha256(token),new Date().toISOString()).first();
+}
+async function ensureAdmin(env:Env){
+  if(!env.ADMIN_USERNAME||!env.ADMIN_EMAIL||!env.ADMIN_PHONE||!env.ADMIN_PASSWORD)return;
+  const existing=await env.DB.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").first();
+  if(existing)return;
+  const salt=randomHex(16);
+  await env.DB.prepare("INSERT INTO users(username,email,phone,password_hash,password_salt,points,role,created_at) VALUES(?,?,?,?,?,0,'admin',?)")
+    .bind(env.ADMIN_USERNAME,env.ADMIN_EMAIL.toLowerCase(),env.ADMIN_PHONE,await hashPassword(env.ADMIN_PASSWORD,salt),salt,new Date().toISOString()).run();
 }
 const sessionCookie=(request:Request,token:string,maxAge=60*60*24*14)=>`traceherb_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${new URL(request.url).protocol==="https:"?"; Secure":""}`;
 
 async function api(request:Request,env:Env,url:URL){
   await ensureDb(env.DB);
+  await ensureAdmin(env);
   const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{"cache-control":"no-store"}});
   if(url.pathname==="/api/auth/me"&&request.method==="GET"){
     return json({user:await currentUser(request,env.DB)});
   }
   if(url.pathname==="/api/auth/register"&&request.method==="POST"){
-    const body=await request.json() as {username?:string;email?:string;phone?:string;password?:string};
+    const body=await request.json() as {username?:string;email?:string;phone?:string;password?:string;role?:string};
     const username=(body.username||"").trim();
     const email=(body.email||"").trim().toLowerCase();
     const phone=(body.phone||"").replace(/\s+/g,"");
     const password=body.password||"";
+    const role=body.role==="seller"?"seller":"buyer";
     if(!/^[\p{L}\p{N}_-]{2,24}$/u.test(username))return json({error:"用户名需为 2–24 位字符"},400);
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json({error:"请输入有效邮箱"},400);
     if(!/^1\d{10}$/.test(phone))return json({error:"请输入有效的 11 位手机号"},400);
@@ -90,18 +106,18 @@ async function api(request:Request,env:Env,url:URL){
     const salt=randomHex(16);
     const passwordHash=await hashPassword(password,salt);
     const createdAt=new Date().toISOString();
-    const result=await env.DB.prepare("INSERT INTO users(username,email,phone,password_hash,password_salt,created_at) VALUES(?,?,?,?,?,?)")
-      .bind(username,email,phone,passwordHash,salt,createdAt).run();
+    const result=await env.DB.prepare("INSERT INTO users(username,email,phone,password_hash,password_salt,role,created_at) VALUES(?,?,?,?,?,?,?)")
+      .bind(username,email,phone,passwordHash,salt,role,createdAt).run();
     const token=randomHex(32);
     const expiresAt=new Date(Date.now()+14*24*60*60*1000).toISOString();
     await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
       .bind(await sha256(token),result.meta.last_row_id,expiresAt,createdAt).run();
-    return new Response(JSON.stringify({user:{id:result.meta.last_row_id,username,email,phone,points:0}}),{status:201,headers:{"content-type":"application/json","cache-control":"no-store","set-cookie":sessionCookie(request,token)}});
+    return new Response(JSON.stringify({user:{id:result.meta.last_row_id,username,email,phone,points:0,role}}),{status:201,headers:{"content-type":"application/json","cache-control":"no-store","set-cookie":sessionCookie(request,token)}});
   }
   if(url.pathname==="/api/auth/login"&&request.method==="POST"){
     const body=await request.json() as {account?:string;password?:string};
     const account=(body.account||"").trim().toLowerCase();
-    const user=await env.DB.prepare("SELECT id,username,email,phone,password_hash passwordHash,password_salt passwordSalt,points FROM users WHERE lower(username)=? OR lower(email)=? OR phone=?")
+    const user=await env.DB.prepare("SELECT id,username,email,phone,password_hash passwordHash,password_salt passwordSalt,points,role FROM users WHERE lower(username)=? OR lower(email)=? OR phone=?")
       .bind(account,account,account.replace(/\s+/g,"")).first<Record<string,unknown>>();
     if(!user)return json({error:"账号或密码错误"},401);
     const candidate=await hashPassword(body.password||"",String(user.passwordSalt));
@@ -111,7 +127,7 @@ async function api(request:Request,env:Env,url:URL){
     const expiresAt=new Date(Date.now()+14*24*60*60*1000).toISOString();
     await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
       .bind(await sha256(token),user.id,expiresAt,createdAt).run();
-    const publicUser={id:user.id,username:user.username,email:user.email,phone:user.phone,points:user.points};
+    const publicUser={id:user.id,username:user.username,email:user.email,phone:user.phone,points:user.points,role:user.role};
     return new Response(JSON.stringify({user:publicUser}),{headers:{"content-type":"application/json","cache-control":"no-store","set-cookie":sessionCookie(request,token)}});
   }
   if(url.pathname==="/api/auth/logout"&&request.method==="POST"){
@@ -124,10 +140,20 @@ async function api(request:Request,env:Env,url:URL){
     return json(rows.results);
   }
   if(url.pathname==="/api/products"&&request.method==="POST"){
+    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    if(!user||!["seller","admin"].includes(user.role||""))return json({error:"无权发布商品"},403);
     const p=await request.json() as Record<string,unknown>;
     await env.DB.prepare("INSERT INTO products(name,category,origin,price,stock,sales,rating,trace_code,badge,description,icon) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
       .bind(p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.traceCode,p.badge,p.description,p.icon).run();
     return json({ok:true},201);
+  }
+  if(url.pathname.startsWith("/api/products/")&&request.method==="DELETE"){
+    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    if(user?.role!=="admin")return json({error:"仅管理员可下架商品"},403);
+    const id=Number(url.pathname.split("/").pop());
+    if(!Number.isInteger(id))return json({error:"商品编号无效"},400);
+    await env.DB.prepare("DELETE FROM products WHERE id=?").bind(id).run();
+    return json({ok:true});
   }
   if(url.pathname==="/api/orders"&&request.method==="POST"){
     const o=await request.json() as {id:string;amount:number;items:unknown[]};
@@ -139,6 +165,8 @@ async function api(request:Request,env:Env,url:URL){
     return json({ok:true,delta:20});
   }
   if(url.pathname==="/api/dashboard"){
+    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    if(user?.role!=="admin")return json({error:"仅管理员可查看运营数据"},403);
     const [p,o]=await env.DB.batch([env.DB.prepare("SELECT COUNT(*) products,SUM(sales) sales FROM products"),env.DB.prepare("SELECT COUNT(*) orders,SUM(amount) revenue FROM orders")]);
     return json({products:p.results[0],orders:o.results[0]});
   }

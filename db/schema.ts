@@ -17,3 +17,19 @@ export const pointEvents = sqliteTable("point_events", {
   id: integer("id").primaryKey({ autoIncrement: true }), userKey: text("user_key").notNull(),
   kind: text("kind").notNull(), delta: integer("delta").notNull(), createdAt: text("created_at").notNull(),
 });
+export const users = sqliteTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  username: text("username").notNull().unique(),
+  email: text("email").notNull().unique(),
+  phone: text("phone").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  passwordSalt: text("password_salt").notNull(),
+  points: integer("points").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+});
+export const sessions = sqliteTable("sessions", {
+  tokenHash: text("token_hash").primaryKey(),
+  userId: integer("user_id").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});

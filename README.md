@@ -1,98 +1,42 @@
-# vinext-starter
+# 迹本草 TraceHerb
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+中草药电商与数字溯源平台，包含商品浏览、购物车、模拟结算、订单、健康积分、商家管理、运营看板，以及独立用户注册与登录。
 
-## Prerequisites
+## 本地运行
 
-- Node.js `>=22.13.0`
+需要 Node.js 22.13 或更高版本。
 
-## Quick Start
+在 Windows PowerShell 中运行：
 
-```bash
-npm install
-npm run dev
-npm run build
+```powershell
+npm.cmd install
+$env:HTTP_PROXY=$null; $env:HTTPS_PROXY=$null; $env:ALL_PROXY=$null
+$env:WRANGLER_LOG_PATH=".wrangler/wrangler.log"; npx.cmd vinext dev
 ```
 
-This starter does not use `wrangler.jsonc`.
+启动后访问终端显示的本地地址，通常为 `http://localhost:3000`。
 
-## Included Shape
+## 用户账户
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+- 注册时填写用户名、邮箱、手机号和密码。
+- 登录时可使用用户名、邮箱或手机号。
+- 密码通过 PBKDF2-SHA256 加盐派生后保存，不保存明文密码。
+- 登录会话使用 HttpOnly、SameSite Cookie。
+- 用户、登录会话、商品、订单和积分数据均保存在 D1 数据库中。
 
-## Workspace Auth Headers
+## 主要目录
 
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
+- `app/`：页面、交互和样式
+- `worker/`：后端接口与身份验证
+- `db/`：数据库模型
+- `drizzle/`：数据库迁移脚本
+- `public/`：网站图片和图标
 
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
+## 常用操作
 
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```powershell
+npx.cmd vinext build
+npm.cmd run db:generate
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+`.openai/hosting.json` 仅用于现有网站的托管与数据库资源绑定，不参与用户登录，也不调用任何模型。

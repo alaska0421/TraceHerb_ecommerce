@@ -16,6 +16,7 @@ export const orders = sqliteTable("orders", {
 export const pointEvents = sqliteTable("point_events", {
   id: integer("id").primaryKey({ autoIncrement: true }), userKey: text("user_key").notNull(),
   kind: text("kind").notNull(), delta: integer("delta").notNull(), createdAt: text("created_at").notNull(),
+  eventDate: text("event_date"),
 });
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),

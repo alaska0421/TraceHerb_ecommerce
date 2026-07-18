@@ -38,6 +38,9 @@ async function ensureDb(db:D1Database){
   ]);
   const roleColumn=await db.prepare("SELECT name FROM pragma_table_info('users') WHERE name='role'").first();
   if(!roleColumn)await db.prepare("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'buyer'").run();
+  const eventDateColumn=await db.prepare("SELECT name FROM pragma_table_info('point_events') WHERE name='event_date'").first();
+  if(!eventDateColumn)await db.prepare("ALTER TABLE point_events ADD COLUMN event_date TEXT").run();
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS point_events_daily_unique ON point_events(user_key,kind,event_date)").run();
   const count=await db.prepare("SELECT COUNT(*) n FROM products").first<{n:number}>();
   if(!count?.n) await db.batch(seedProducts.map(p=>db.prepare("INSERT INTO products VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(...p)));
 }
@@ -160,9 +163,27 @@ async function api(request:Request,env:Env,url:URL){
     await env.DB.prepare("INSERT INTO orders(id,amount,items_json,status,created_at) VALUES(?,?,?,?,?)").bind(o.id,o.amount,JSON.stringify(o.items),"待发货",new Date().toISOString()).run();
     return json({ok:true},201);
   }
+  if(url.pathname==="/api/checkin"&&request.method==="GET"){
+    const user=await currentUser(request,env.DB) as {id?:number;role?:string;points?:number}|null;
+    if(!user||user.role!=="buyer")return json({error:"请使用买家账户登录"},403);
+    const date=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+    const event=await env.DB.prepare("SELECT id FROM point_events WHERE user_key=? AND kind='checkin' AND event_date=?").bind(String(user.id),date).first();
+    return json({checked:!!event,points:user.points||0});
+  }
   if(url.pathname==="/api/checkin"&&request.method==="POST"){
-    await env.DB.prepare("INSERT INTO point_events(user_key,kind,delta,created_at) VALUES(?,?,?,?)").bind("demo-user","checkin",20,new Date().toISOString()).run();
-    return json({ok:true,delta:20});
+    const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
+    if(!user||user.role!=="buyer")return json({error:"请使用买家账户登录"},403);
+    const now=new Date();
+    const date=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(now);
+    const inserted=await env.DB.prepare("INSERT OR IGNORE INTO point_events(user_key,kind,delta,created_at,event_date) VALUES(?,'checkin',20,?,?)")
+      .bind(String(user.id),now.toISOString(),date).run();
+    if(inserted.meta.changes===0){
+      const balance=await env.DB.prepare("SELECT points FROM users WHERE id=?").bind(user.id).first<{points:number}>();
+      return json({ok:true,alreadyChecked:true,delta:0,points:balance?.points||0});
+    }
+    await env.DB.prepare("UPDATE users SET points=points+20 WHERE id=?").bind(user.id).run();
+    const balance=await env.DB.prepare("SELECT points FROM users WHERE id=?").bind(user.id).first<{points:number}>();
+    return json({ok:true,alreadyChecked:false,delta:20,points:balance?.points||0});
   }
   if(url.pathname==="/api/dashboard"){
     const user=await currentUser(request,env.DB) as {role?:string}|null;

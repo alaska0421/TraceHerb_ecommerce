@@ -96,7 +96,7 @@ export default function Home() {
         <div className="section-head"><div><p className="eyebrow">SEASONAL SELECTION</p><h2>顺时而养 · 本周严选</h2></div><div className="search"><input aria-label="搜索商品" placeholder="搜索药材、产地…" value={query} onChange={e=>setQuery(e.target.value)}/><button>⌕</button></div></div>
         <div className="filters">{["全部","药食同源","滋补药材","养生茶饮","手作养生"].map(x=><button className={category===x?"on":""} onClick={()=>setCategory(x)} key={x}>{x}</button>)}</div>
         <div className="product-grid">{filtered.map(p=><article className="product-card" key={p.id}>
-          <div className={`product-visual ${p.id>=1&&p.id<=18?"has-photo":`tone${p.id}`}`} style={p.id>=1&&p.id<=18?{"--photo-col":(p.id-1)%6,"--photo-row":Math.floor((p.id-1)/6)} as React.CSSProperties:undefined}><span>{p.icon}</span><b>{p.badge}</b><button aria-label="收藏">♡</button></div>
+          <div className={`product-visual ${p.id>=1&&p.id<=18?"has-photo":`tone${p.id}`}`} style={p.id>=1&&p.id<=18?{"--photo-col":(p.id-1)%6,"--photo-row":Math.floor((p.id-1)/6)} as React.CSSProperties:undefined}><span>{p.icon}</span><b>{p.badge}</b></div>
           <div className="product-info"><small>{p.origin}</small><h3>{p.name}</h3><p>{p.description}</p><div className="rating">★★★★★ <span>{p.rating} · 已售 {p.sales}</span></div><div className="price"><strong>¥{p.price}</strong><div><button className="trace-btn" onClick={()=>setTrace(p)}>查溯源</button><button className="add-btn" onClick={()=>add(p)}>＋</button></div></div></div>
         </article>)}</div>
       </section>

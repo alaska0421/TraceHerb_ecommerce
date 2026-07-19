@@ -222,6 +222,46 @@ async function api(request:Request,env:Env,url:URL){
     }
     return json(rows.results);
   }
+  if(url.pathname.startsWith("/api/admin/database/")&&request.method==="GET"){
+    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    if(user?.role!=="admin")return json({error:"仅管理员可访问数据库管理"},403);
+    const dataset=url.pathname.split("/").pop();
+    const definitions:Record<string,{sql:string;headers:string[];keys:string[]}>={
+      users:{
+        sql:"SELECT id,username,email,phone,points,role,created_at createdAt FROM users ORDER BY created_at DESC",
+        headers:["用户ID","用户名","邮箱","手机号","积分","身份","注册时间"],
+        keys:["id","username","email","phone","points","role","createdAt"],
+      },
+      orders:{
+        sql:"SELECT o.id,o.amount,o.items_json itemsJson,o.status,o.payment_method paymentMethod,o.transaction_id transactionId,o.created_at createdAt,o.paid_at paidAt,COALESCE(u.username,'历史/匿名用户') username FROM orders o LEFT JOIN users u ON u.id=o.user_id ORDER BY o.created_at DESC",
+        headers:["订单号","买家","金额","商品明细","订单状态","支付方式","支付流水号","下单时间","支付时间"],
+        keys:["id","username","amount","itemsJson","status","paymentMethod","transactionId","createdAt","paidAt"],
+      },
+      points:{
+        sql:"SELECT p.id,p.user_key userKey,COALESCE(u.username,'未知用户') username,p.kind,p.delta,p.event_date eventDate,p.created_at createdAt FROM point_events p LEFT JOIN users u ON CAST(u.id AS TEXT)=p.user_key ORDER BY p.created_at DESC",
+        headers:["记录ID","用户ID","用户名","积分类型","积分变化","归属日期","记录时间"],
+        keys:["id","userKey","username","kind","delta","eventDate","createdAt"],
+      },
+    };
+    const definition=dataset?definitions[dataset]:null;
+    if(!definition)return json({error:"不支持的数据类型"},404);
+    const rows=await env.DB.prepare(definition.sql).all();
+    if(url.searchParams.get("format")==="csv"){
+      const escape=(value:unknown)=>`"${String(value??"").replace(/"/g,'""')}"`;
+      const roleLabels:Record<string,string>={buyer:"买家",seller:"卖家",admin:"管理员"};
+      const methodLabels:Record<string,string>={alipay_sandbox:"支付宝沙箱",wechat_mock:"微信模拟支付"};
+      const kindLabels:Record<string,string>={checkin:"每日签到"};
+      const normalize=(key:string,value:unknown)=>{
+        if(key==="role")return roleLabels[String(value)]||value;
+        if(key==="paymentMethod")return methodLabels[String(value)]||value;
+        if(key==="kind")return kindLabels[String(value)]||value;
+        return value;
+      };
+      const lines=[definition.headers.map(escape).join(","),...rows.results.map((row:Record<string,unknown>)=>definition.keys.map(key=>escape(normalize(key,row[key]))).join(","))];
+      return new Response("\uFEFF"+lines.join("\r\n"),{headers:{"content-type":"text/csv; charset=utf-8","content-disposition":`attachment; filename="traceherb-${dataset}-${new Date().toISOString().slice(0,10)}.csv"`,"cache-control":"no-store"}});
+    }
+    return json(rows.results);
+  }
   if(url.pathname==="/api/checkin"&&request.method==="GET"){
     const user=await currentUser(request,env.DB) as {id?:number;role?:string;points?:number}|null;
     if(!user||user.role!=="buyer")return json({error:"请使用买家账户登录"},403);

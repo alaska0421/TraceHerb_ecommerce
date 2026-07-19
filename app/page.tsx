@@ -17,6 +17,18 @@ const fallbackProducts: Product[] = [
   { id:4,name:"古法艾草足浴包",category:"手作养生",origin:"湖北 · 蕲春",price:39.9,stock:310,sales:2180,rating:4.7,traceCode:"TH-HB-20260708",badge:"匠心手作",description:"蕲艾、老姜、花椒科学配伍，独立便携装",icon:"艾" },
   { id:5,name:"云南三七超细粉",category:"滋补药材",origin:"云南 · 文山",price:158,stock:45,sales:402,rating:4.8,traceCode:"TH-YN-20260521",badge:"权威质检",description:"20头春三七，低温破壁，批次检验可查",icon:"七" },
   { id:6,name:"桂圆红枣养生茶",category:"养生茶饮",origin:"福建 · 莆田",price:45,stock:188,sales:932,rating:4.6,traceCode:"TH-FJ-20260710",badge:"配方公开",description:"0香精0色素，独立三角包，办公室轻养生",icon:"茶" },
+  { id:7,name:"长白山五年人参",category:"滋补药材",origin:"吉林 · 长白山",price:198,stock:52,sales:368,rating:4.9,traceCode:"TH-JL-20260712",badge:"林下参认证",description:"五年参龄，参体完整，低温干燥保留自然参香",icon:"参" },
+  { id:8,name:"桐乡胎菊精选",category:"养生茶饮",origin:"浙江 · 桐乡",price:49,stock:260,sales:1186,rating:4.8,traceCode:"TH-ZJ-20260703",badge:"头采花蕾",description:"头茬花蕾颗颗饱满，汤色清亮，清香自然",icon:"菊" },
+  { id:9,name:"温县铁棍山药片",category:"药食同源",origin:"河南 · 温县",price:58,stock:176,sales:754,rating:4.7,traceCode:"TH-HN-20260626",badge:"道地产区",description:"垆土地铁棍山药，低温烘干，粉糯清甜",icon:"药" },
+  { id:10,name:"川贝母精选粒",category:"滋补药材",origin:"四川 · 阿坝",price:268,stock:38,sales:206,rating:4.9,traceCode:"TH-SC-20260516",badge:"人工精选",description:"颗粒均匀、质地坚实，每批次含量检测",icon:"贝" },
+  { id:11,name:"陇西黄芪片",category:"滋补药材",origin:"甘肃 · 陇西",price:76,stock:142,sales:685,rating:4.8,traceCode:"TH-GS-20260629",badge:"核心产区",description:"绵芪切片，菊花心明显，甘香自然",icon:"芪" },
+  { id:12,name:"封丘金银花",category:"养生茶饮",origin:"河南 · 封丘",price:69,stock:120,sales:594,rating:4.7,traceCode:"TH-HN-20260706",badge:"晨采锁鲜",description:"花蕾完整，晨采低温烘制，清香不焦",icon:"花" },
+  { id:13,name:"建宁通芯白莲",category:"药食同源",origin:"福建 · 建宁",price:72,stock:205,sales:812,rating:4.8,traceCode:"TH-FJ-20260622",badge:"手工通芯",description:"颗粒圆润，手工通芯，炖煮软糯清香",icon:"莲" },
+  { id:14,name:"云南茯苓丁",category:"药食同源",origin:"云南 · 普洱",price:65,stock:164,sales:477,rating:4.7,traceCode:"TH-YN-20260612",badge:"洁净切制",description:"松根茯苓洁净切丁，色白质实，易煮易搭配",icon:"苓" },
+  { id:15,name:"永福罗汉果",category:"养生茶饮",origin:"广西 · 桂林",price:42,stock:228,sales:1064,rating:4.8,traceCode:"TH-GX-20260702",badge:"低温脱水",description:"果形完整，低温脱水，泡饮甘甜无焦苦",icon:"罗" },
+  { id:16,name:"新疆黑桑葚干",category:"药食同源",origin:"新疆 · 吐鲁番",price:55,stock:190,sales:983,rating:4.7,traceCode:"TH-XJ-20260709",badge:"自然成熟",description:"成熟黑桑葚低温烘干，果肉饱满，酸甜适口",icon:"桑" },
+  { id:17,name:"霍山铁皮石斛",category:"滋补药材",origin:"安徽 · 霍山",price:238,stock:34,sales:172,rating:4.9,traceCode:"TH-AH-20260508",badge:"基地认证",description:"仿野生种植，鲜条低温加工，胶质丰富",icon:"斛" },
+  { id:18,name:"广西炒决明子",category:"养生茶饮",origin:"广西 · 百色",price:36,stock:286,sales:1245,rating:4.6,traceCode:"TH-GX-20260711",badge:"古法轻炒",description:"颗粒饱满，轻火炒制，焦香柔和适合日常泡饮",icon:"明" },
 ];
 
 const traceSteps = ["基地种植","采收初检","洁净加工","权威质检","仓储入库","平台发货"];
@@ -84,7 +96,7 @@ export default function Home() {
         <div className="section-head"><div><p className="eyebrow">SEASONAL SELECTION</p><h2>顺时而养 · 本周严选</h2></div><div className="search"><input aria-label="搜索商品" placeholder="搜索药材、产地…" value={query} onChange={e=>setQuery(e.target.value)}/><button>⌕</button></div></div>
         <div className="filters">{["全部","药食同源","滋补药材","养生茶饮","手作养生"].map(x=><button className={category===x?"on":""} onClick={()=>setCategory(x)} key={x}>{x}</button>)}</div>
         <div className="product-grid">{filtered.map(p=><article className="product-card" key={p.id}>
-          <div className={`product-visual tone${p.id}`}><span>{p.icon}</span><b>{p.badge}</b><button aria-label="收藏">♡</button></div>
+          <div className={`product-visual ${p.id>=1&&p.id<=18?"has-photo":`tone${p.id}`}`} style={p.id>=1&&p.id<=18?{"--photo-col":(p.id-1)%6,"--photo-row":Math.floor((p.id-1)/6)} as React.CSSProperties:undefined}><span>{p.icon}</span><b>{p.badge}</b><button aria-label="收藏">♡</button></div>
           <div className="product-info"><small>{p.origin}</small><h3>{p.name}</h3><p>{p.description}</p><div className="rating">★★★★★ <span>{p.rating} · 已售 {p.sales}</span></div><div className="price"><strong>¥{p.price}</strong><div><button className="trace-btn" onClick={()=>setTrace(p)}>查溯源</button><button className="add-btn" onClick={()=>add(p)}>＋</button></div></div></div>
         </article>)}</div>
       </section>

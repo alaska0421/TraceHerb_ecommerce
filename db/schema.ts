@@ -13,7 +13,7 @@ export const orders = sqliteTable("orders", {
   itemsJson: text("items_json").notNull(), status: text("status").notNull().default("待发货"),
   createdAt: text("created_at").notNull(), userId: integer("user_id"),
   paymentMethod: text("payment_method"), transactionId: text("transaction_id"),
-  paidAt: text("paid_at"),
+  paidAt: text("paid_at"), shippedAt: text("shipped_at"), completedAt: text("completed_at"),
 });
 export const paymentTransactions = sqliteTable("payment_transactions", {
   id: text("id").primaryKey(), orderId: text("order_id").notNull(),

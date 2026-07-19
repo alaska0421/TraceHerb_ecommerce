@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE TABLE IF NOT EXISTS orders (
  id TEXT PRIMARY KEY, amount REAL NOT NULL, items_json TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT '待发货', created_at TEXT NOT NULL,
- user_id INTEGER, payment_method TEXT, transaction_id TEXT, paid_at TEXT
+ user_id INTEGER, payment_method TEXT, transaction_id TEXT, paid_at TEXT,
+ shipped_at TEXT, completed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS payment_transactions (
  id TEXT PRIMARY KEY, order_id TEXT NOT NULL, user_id INTEGER NOT NULL,

@@ -58,6 +58,8 @@ async function ensureDb(db:D1Database){
     ["payment_method","ALTER TABLE orders ADD COLUMN payment_method TEXT"],
     ["transaction_id","ALTER TABLE orders ADD COLUMN transaction_id TEXT"],
     ["paid_at","ALTER TABLE orders ADD COLUMN paid_at TEXT"],
+    ["shipped_at","ALTER TABLE orders ADD COLUMN shipped_at TEXT"],
+    ["completed_at","ALTER TABLE orders ADD COLUMN completed_at TEXT"],
   ]){
     const column=await db.prepare("SELECT name FROM pragma_table_info('orders') WHERE name=?").bind(name).first();
     if(!column)await db.prepare(sql).run();
@@ -174,6 +176,28 @@ async function api(request:Request,env:Env,url:URL){
       .bind(p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.traceCode,p.badge,p.description,p.icon).run();
     return json({ok:true},201);
   }
+  if(url.pathname.startsWith("/api/products/")&&request.method==="PATCH"){
+    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    if(!user||!["seller","admin"].includes(user.role||""))return json({error:"无权修改商品"},403);
+    const id=Number(url.pathname.split("/").pop());
+    if(!Number.isInteger(id))return json({error:"商品编号无效"},400);
+    const body=await request.json() as Record<string,unknown>;
+    const name=String(body.name||"").trim();
+    const category=String(body.category||"").trim();
+    const origin=String(body.origin||"").trim();
+    const description=String(body.description||"").trim();
+    const badge=String(body.badge||"").trim();
+    const price=Number(body.price);
+    const stock=Number(body.stock);
+    if(!name||!category||!origin||!description||!badge||!Number.isFinite(price)||price<=0||!Number.isInteger(stock)||stock<0){
+      return json({error:"请完整填写有效的商品信息"},400);
+    }
+    const result=await env.DB.prepare("UPDATE products SET name=?,category=?,origin=?,price=?,stock=?,badge=?,description=? WHERE id=?")
+      .bind(name,category,origin,price,stock,badge,description,id).run();
+    if(!result.meta.changes)return json({error:"商品不存在"},404);
+    const product=await env.DB.prepare("SELECT id,name,category,origin,price,stock,sales,rating,trace_code traceCode,badge,description,icon FROM products WHERE id=?").bind(id).first();
+    return json({ok:true,product});
+  }
   if(url.pathname.startsWith("/api/products/")&&request.method==="DELETE"){
     const user=await currentUser(request,env.DB) as {role?:string}|null;
     if(user?.role!=="admin")return json({error:"仅管理员可下架商品"},403);
@@ -185,9 +209,39 @@ async function api(request:Request,env:Env,url:URL){
   if(url.pathname==="/api/orders"&&request.method==="GET"){
     const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
     if(!user||user.role!=="buyer")return json({error:"请使用买家账户登录"},403);
-    const rows=await env.DB.prepare("SELECT id,amount,items_json itemsJson,status,created_at createdAt,payment_method paymentMethod,transaction_id transactionId FROM orders WHERE user_id=? ORDER BY created_at DESC")
+    const rows=await env.DB.prepare("SELECT id,amount,items_json itemsJson,status,created_at createdAt,payment_method paymentMethod,transaction_id transactionId,paid_at paidAt,shipped_at shippedAt,completed_at completedAt FROM orders WHERE user_id=? ORDER BY created_at DESC")
       .bind(user.id).all();
     return json(rows.results.map((row:Record<string,unknown>)=>({...row,items:JSON.parse(String(row.itemsJson||"[]"))})));
+  }
+  if(url.pathname.startsWith("/api/orders/")&&request.method==="PATCH"){
+    const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
+    if(!user||user.role!=="buyer")return json({error:"请使用买家账户登录"},403);
+    const orderId=decodeURIComponent(url.pathname.split("/").pop()||"");
+    const body=await request.json() as {action?:string};
+    if(body.action!=="receive")return json({error:"不支持的订单操作"},400);
+    const now=new Date().toISOString();
+    const result=await env.DB.prepare("UPDATE orders SET status='已完成',completed_at=? WHERE id=? AND user_id=? AND status='已发货'")
+      .bind(now,orderId,user.id).run();
+    if(!result.meta.changes)return json({error:"只有已发货订单可以确认收货"},409);
+    return json({ok:true,status:"已完成",completedAt:now});
+  }
+  if(url.pathname==="/api/merchant/orders"&&request.method==="GET"){
+    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    if(!user||user.role!=="seller")return json({error:"请使用卖家账户登录"},403);
+    const rows=await env.DB.prepare("SELECT o.id,o.amount,o.items_json itemsJson,o.status,o.created_at createdAt,o.shipped_at shippedAt,o.completed_at completedAt,COALESCE(u.username,'买家') username FROM orders o LEFT JOIN users u ON u.id=o.user_id ORDER BY o.created_at DESC").all();
+    return json(rows.results.map((row:Record<string,unknown>)=>({...row,items:JSON.parse(String(row.itemsJson||"[]"))})));
+  }
+  if(url.pathname.startsWith("/api/merchant/orders/")&&request.method==="PATCH"){
+    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    if(!user||user.role!=="seller")return json({error:"请使用卖家账户登录"},403);
+    const orderId=decodeURIComponent(url.pathname.split("/").pop()||"");
+    const body=await request.json() as {action?:string};
+    if(body.action!=="ship")return json({error:"不支持的订单操作"},400);
+    const now=new Date().toISOString();
+    const result=await env.DB.prepare("UPDATE orders SET status='已发货',shipped_at=? WHERE id=? AND status='待发货'")
+      .bind(now,orderId).run();
+    if(!result.meta.changes)return json({error:"只有待发货订单可以执行发货"},409);
+    return json({ok:true,status:"已发货",shippedAt:now});
   }
   if(url.pathname==="/api/payments/sandbox"&&request.method==="POST"){
     const user=await currentUser(request,env.DB) as {id?:number;username?:string;role?:string}|null;
@@ -246,9 +300,9 @@ async function api(request:Request,env:Env,url:URL){
         keys:["id","username","email","phone","points","role","createdAt"],
       },
       orders:{
-        sql:"SELECT o.id,o.amount,o.items_json itemsJson,o.status,o.payment_method paymentMethod,o.transaction_id transactionId,o.created_at createdAt,o.paid_at paidAt,COALESCE(u.username,'历史/匿名用户') username FROM orders o LEFT JOIN users u ON u.id=o.user_id ORDER BY o.created_at DESC",
-        headers:["订单号","买家","金额","商品明细","订单状态","支付方式","支付流水号","下单时间","支付时间"],
-        keys:["id","username","amount","itemsJson","status","paymentMethod","transactionId","createdAt","paidAt"],
+        sql:"SELECT o.id,o.amount,o.items_json itemsJson,o.status,o.payment_method paymentMethod,o.transaction_id transactionId,o.created_at createdAt,o.paid_at paidAt,o.shipped_at shippedAt,o.completed_at completedAt,COALESCE(u.username,'历史/匿名用户') username FROM orders o LEFT JOIN users u ON u.id=o.user_id ORDER BY o.created_at DESC",
+        headers:["订单号","买家","金额","商品明细","订单状态","支付方式","支付流水号","下单时间","支付时间","发货时间","完成时间"],
+        keys:["id","username","amount","itemsJson","status","paymentMethod","transactionId","createdAt","paidAt","shippedAt","completedAt"],
       },
       points:{
         sql:"SELECT p.id,p.user_key userKey,COALESCE(u.username,'未知用户') username,p.kind,p.delta,p.event_date eventDate,p.created_at createdAt FROM point_events p LEFT JOIN users u ON CAST(u.id AS TEXT)=p.user_key ORDER BY p.created_at DESC",

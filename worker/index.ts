@@ -39,11 +39,19 @@ const seedProducts = [
   [18,"广西炒决明子","养生茶饮","广西 · 百色",36,286,1245,4.6,"TH-GX-20260711","古法轻炒","颗粒饱满，轻火炒制，焦香柔和适合日常泡饮","明"],
 ];
 
+const seedSellers = [
+  {username:"seller_qinghe",email:"qinghe@traceherb.demo",phone:"19910001001",password:"QhTrace2026!",storeName:"清和本草",productIds:[1,2,3]},
+  {username:"seller_daodi",email:"daodi@traceherb.demo",phone:"19910001002",password:"DdTrace2026!",storeName:"道地药坊",productIds:[4,5,6,7,8]},
+  {username:"seller_yunling",email:"yunling@traceherb.demo",phone:"19910001003",password:"YlTrace2026!",storeName:"云岭养生",productIds:[9,10,11,12]},
+  {username:"seller_baicao",email:"baicao@traceherb.demo",phone:"19910001004",password:"BcTrace2026!",storeName:"百草堂",productIds:[13,14,15,16,17,18]},
+];
+
 async function ensureDb(db:D1Database){
   await db.batch([
     db.prepare("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT NOT NULL,origin TEXT NOT NULL,price REAL NOT NULL,stock INTEGER NOT NULL DEFAULT 0,sales INTEGER NOT NULL DEFAULT 0,rating REAL NOT NULL DEFAULT 5,trace_code TEXT NOT NULL UNIQUE,badge TEXT NOT NULL,description TEXT NOT NULL,icon TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY,amount REAL NOT NULL,items_json TEXT NOT NULL,status TEXT NOT NULL DEFAULT '待发货',created_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS payment_transactions (id TEXT PRIMARY KEY,order_id TEXT NOT NULL,user_id INTEGER NOT NULL,username TEXT NOT NULL,method TEXT NOT NULL,amount REAL NOT NULL,status TEXT NOT NULL,environment TEXT NOT NULL DEFAULT 'sandbox',created_at TEXT NOT NULL,paid_at TEXT)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS order_fulfillments (id INTEGER PRIMARY KEY AUTOINCREMENT,order_id TEXT NOT NULL,seller_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT '待发货',shipped_at TEXT,completed_at TEXT,UNIQUE(order_id,seller_id))"),
     db.prepare("CREATE TABLE IF NOT EXISTS point_events (id INTEGER PRIMARY KEY AUTOINCREMENT,user_key TEXT NOT NULL,kind TEXT NOT NULL,delta INTEGER NOT NULL,created_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT NOT NULL UNIQUE,email TEXT NOT NULL UNIQUE,phone TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,password_salt TEXT NOT NULL,points INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY,user_id INTEGER NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)"),
@@ -51,6 +59,10 @@ async function ensureDb(db:D1Database){
   ]);
   const roleColumn=await db.prepare("SELECT name FROM pragma_table_info('users') WHERE name='role'").first();
   if(!roleColumn)await db.prepare("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'buyer'").run();
+  const storeNameColumn=await db.prepare("SELECT name FROM pragma_table_info('users') WHERE name='store_name'").first();
+  if(!storeNameColumn)await db.prepare("ALTER TABLE users ADD COLUMN store_name TEXT").run();
+  const sellerIdColumn=await db.prepare("SELECT name FROM pragma_table_info('products') WHERE name='seller_id'").first();
+  if(!sellerIdColumn)await db.prepare("ALTER TABLE products ADD COLUMN seller_id INTEGER").run();
   const eventDateColumn=await db.prepare("SELECT name FROM pragma_table_info('point_events') WHERE name='event_date'").first();
   if(!eventDateColumn)await db.prepare("ALTER TABLE point_events ADD COLUMN event_date TEXT").run();
   for(const [name,sql] of [
@@ -67,8 +79,23 @@ async function ensureDb(db:D1Database){
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS point_events_daily_unique ON point_events(user_key,kind,event_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS payment_transactions_created_at_idx ON payment_transactions(created_at)").run();
   const count=await db.prepare("SELECT COUNT(*) n FROM products").first<{n:number}>();
-  if(!count?.n) await db.batch(seedProducts.map(p=>db.prepare("INSERT INTO products VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(...p)));
-  else if(count.n<18) await db.batch(seedProducts.slice(6).map(p=>db.prepare("INSERT OR IGNORE INTO products VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(...p)));
+  if(!count?.n) await db.batch(seedProducts.map(p=>db.prepare("INSERT INTO products(id,name,category,origin,price,stock,sales,rating,trace_code,badge,description,icon) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(...p)));
+  else if(count.n<18) await db.batch(seedProducts.slice(6).map(p=>db.prepare("INSERT OR IGNORE INTO products(id,name,category,origin,price,stock,sales,rating,trace_code,badge,description,icon) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(...p)));
+  for(const seller of seedSellers){
+    let account=await db.prepare("SELECT id FROM users WHERE username=?").bind(seller.username).first<{id:number}>();
+    if(!account){
+      const salt=randomHex(16);
+      const result=await db.prepare("INSERT INTO users(username,email,phone,password_hash,password_salt,points,role,store_name,created_at) VALUES(?,?,?,?,?,0,'seller',?,?)")
+        .bind(seller.username,seller.email,seller.phone,await hashPassword(seller.password,salt),salt,seller.storeName,new Date().toISOString()).run();
+      account={id:Number(result.meta.last_row_id)};
+    }else{
+      await db.prepare("UPDATE users SET role='seller',store_name=? WHERE id=?").bind(seller.storeName,account.id).run();
+    }
+    const placeholders=seller.productIds.map(()=>"?").join(",");
+    await db.prepare(`UPDATE products SET seller_id=? WHERE id IN (${placeholders})`).bind(account.id,...seller.productIds).run();
+  }
+  await db.prepare("UPDATE users SET store_name=username||'的店铺' WHERE role='seller' AND (store_name IS NULL OR trim(store_name)='')").run();
+  await db.prepare("INSERT OR IGNORE INTO order_fulfillments(order_id,seller_id,status,shipped_at,completed_at) SELECT DISTINCT o.id,p.seller_id,o.status,o.shipped_at,o.completed_at FROM orders o JOIN json_each(o.items_json) j JOIN products p ON p.id=CAST(json_extract(j.value,'$.id') AS INTEGER) WHERE p.seller_id IS NOT NULL").run();
 }
 
 const encoder = new TextEncoder();
@@ -99,7 +126,7 @@ function cookieValue(request:Request,name:string){
 async function currentUser(request:Request,db:D1Database){
   const token=cookieValue(request,"traceherb_session");
   if(!token)return null;
-  return db.prepare("SELECT u.id,u.username,u.email,u.phone,u.points,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?")
+  return db.prepare("SELECT u.id,u.username,u.email,u.phone,u.points,u.role,u.store_name storeName FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?")
     .bind(await sha256(token),new Date().toISOString()).first();
 }
 async function ensureAdmin(env:Env){
@@ -120,33 +147,35 @@ async function api(request:Request,env:Env,url:URL){
     return json({user:await currentUser(request,env.DB)});
   }
   if(url.pathname==="/api/auth/register"&&request.method==="POST"){
-    const body=await request.json() as {username?:string;email?:string;phone?:string;password?:string;role?:string};
+    const body=await request.json() as {username?:string;email?:string;phone?:string;password?:string;role?:string;storeName?:string};
     const username=(body.username||"").trim();
     const email=(body.email||"").trim().toLowerCase();
     const phone=(body.phone||"").replace(/\s+/g,"");
     const password=body.password||"";
     const role=body.role==="seller"?"seller":"buyer";
+    const storeName=role==="seller"?(body.storeName||"").trim():null;
     if(!/^[\p{L}\p{N}_-]{2,24}$/u.test(username))return json({error:"用户名需为 2–24 位字符"},400);
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json({error:"请输入有效邮箱"},400);
     if(!/^1\d{10}$/.test(phone))return json({error:"请输入有效的 11 位手机号"},400);
     if(password.length<8)return json({error:"密码至少需要 8 位"},400);
+    if(role==="seller"&&(storeName||"").length<2)return json({error:"店铺名称至少需要 2 个字符"},400);
     const exists=await env.DB.prepare("SELECT id FROM users WHERE username=? OR email=? OR phone=?").bind(username,email,phone).first();
     if(exists)return json({error:"用户名、邮箱或手机号已被注册"},409);
     const salt=randomHex(16);
     const passwordHash=await hashPassword(password,salt);
     const createdAt=new Date().toISOString();
-    const result=await env.DB.prepare("INSERT INTO users(username,email,phone,password_hash,password_salt,role,created_at) VALUES(?,?,?,?,?,?,?)")
-      .bind(username,email,phone,passwordHash,salt,role,createdAt).run();
+    const result=await env.DB.prepare("INSERT INTO users(username,email,phone,password_hash,password_salt,role,store_name,created_at) VALUES(?,?,?,?,?,?,?,?)")
+      .bind(username,email,phone,passwordHash,salt,role,storeName,createdAt).run();
     const token=randomHex(32);
     const expiresAt=new Date(Date.now()+14*24*60*60*1000).toISOString();
     await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
       .bind(await sha256(token),result.meta.last_row_id,expiresAt,createdAt).run();
-    return new Response(JSON.stringify({user:{id:result.meta.last_row_id,username,email,phone,points:0,role}}),{status:201,headers:{"content-type":"application/json","cache-control":"no-store","set-cookie":sessionCookie(request,token)}});
+    return new Response(JSON.stringify({user:{id:result.meta.last_row_id,username,email,phone,points:0,role,storeName}}),{status:201,headers:{"content-type":"application/json","cache-control":"no-store","set-cookie":sessionCookie(request,token)}});
   }
   if(url.pathname==="/api/auth/login"&&request.method==="POST"){
     const body=await request.json() as {account?:string;password?:string};
     const account=(body.account||"").trim().toLowerCase();
-    const user=await env.DB.prepare("SELECT id,username,email,phone,password_hash passwordHash,password_salt passwordSalt,points,role FROM users WHERE lower(username)=? OR lower(email)=? OR phone=?")
+    const user=await env.DB.prepare("SELECT id,username,email,phone,password_hash passwordHash,password_salt passwordSalt,points,role,store_name storeName FROM users WHERE lower(username)=? OR lower(email)=? OR phone=?")
       .bind(account,account,account.replace(/\s+/g,"")).first<Record<string,unknown>>();
     if(!user)return json({error:"账号或密码错误"},401);
     const candidate=await hashPassword(body.password||"",String(user.passwordSalt));
@@ -156,7 +185,7 @@ async function api(request:Request,env:Env,url:URL){
     const expiresAt=new Date(Date.now()+14*24*60*60*1000).toISOString();
     await env.DB.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
       .bind(await sha256(token),user.id,expiresAt,createdAt).run();
-    const publicUser={id:user.id,username:user.username,email:user.email,phone:user.phone,points:user.points,role:user.role};
+    const publicUser={id:user.id,username:user.username,email:user.email,phone:user.phone,points:user.points,role:user.role,storeName:user.storeName};
     return new Response(JSON.stringify({user:publicUser}),{headers:{"content-type":"application/json","cache-control":"no-store","set-cookie":sessionCookie(request,token)}});
   }
   if(url.pathname==="/api/auth/logout"&&request.method==="POST"){
@@ -165,19 +194,20 @@ async function api(request:Request,env:Env,url:URL){
     return new Response(JSON.stringify({ok:true}),{headers:{"content-type":"application/json","set-cookie":sessionCookie(request,"",0)}});
   }
   if(url.pathname==="/api/products"&&request.method==="GET"){
-    const rows=await env.DB.prepare("SELECT id,name,category,origin,price,stock,sales,rating,trace_code traceCode,badge,description,icon FROM products ORDER BY id").all();
+    const rows=await env.DB.prepare("SELECT p.id,p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.trace_code traceCode,p.badge,p.description,p.icon,p.seller_id sellerId,COALESCE(u.store_name,'平台自营') storeName FROM products p LEFT JOIN users u ON u.id=p.seller_id ORDER BY p.id").all();
     return json(rows.results);
   }
   if(url.pathname==="/api/products"&&request.method==="POST"){
-    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
     if(!user||!["seller","admin"].includes(user.role||""))return json({error:"无权发布商品"},403);
     const p=await request.json() as Record<string,unknown>;
-    await env.DB.prepare("INSERT INTO products(name,category,origin,price,stock,sales,rating,trace_code,badge,description,icon) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.traceCode,p.badge,p.description,p.icon).run();
-    return json({ok:true},201);
+    const sellerId=user.role==="seller"?user.id:Number(p.sellerId)||null;
+    const result=await env.DB.prepare("INSERT INTO products(name,category,origin,price,stock,sales,rating,trace_code,badge,description,icon,seller_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.traceCode,p.badge,p.description,p.icon,sellerId).run();
+    return json({ok:true,id:result.meta.last_row_id},201);
   }
   if(url.pathname.startsWith("/api/products/")&&request.method==="PATCH"){
-    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
     if(!user||!["seller","admin"].includes(user.role||""))return json({error:"无权修改商品"},403);
     const id=Number(url.pathname.split("/").pop());
     if(!Number.isInteger(id))return json({error:"商品编号无效"},400);
@@ -192,10 +222,11 @@ async function api(request:Request,env:Env,url:URL){
     if(!name||!category||!origin||!description||!badge||!Number.isFinite(price)||price<=0||!Number.isInteger(stock)||stock<0){
       return json({error:"请完整填写有效的商品信息"},400);
     }
-    const result=await env.DB.prepare("UPDATE products SET name=?,category=?,origin=?,price=?,stock=?,badge=?,description=? WHERE id=?")
-      .bind(name,category,origin,price,stock,badge,description,id).run();
+    const result=user.role==="admin"
+      ?await env.DB.prepare("UPDATE products SET name=?,category=?,origin=?,price=?,stock=?,badge=?,description=? WHERE id=?").bind(name,category,origin,price,stock,badge,description,id).run()
+      :await env.DB.prepare("UPDATE products SET name=?,category=?,origin=?,price=?,stock=?,badge=?,description=? WHERE id=? AND seller_id=?").bind(name,category,origin,price,stock,badge,description,id,user.id).run();
     if(!result.meta.changes)return json({error:"商品不存在"},404);
-    const product=await env.DB.prepare("SELECT id,name,category,origin,price,stock,sales,rating,trace_code traceCode,badge,description,icon FROM products WHERE id=?").bind(id).first();
+    const product=await env.DB.prepare("SELECT p.id,p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.trace_code traceCode,p.badge,p.description,p.icon,p.seller_id sellerId,COALESCE(u.store_name,'平台自营') storeName FROM products p LEFT JOIN users u ON u.id=p.seller_id WHERE p.id=?").bind(id).first();
     return json({ok:true,product});
   }
   if(url.pathname.startsWith("/api/products/")&&request.method==="DELETE"){
@@ -223,24 +254,33 @@ async function api(request:Request,env:Env,url:URL){
     const result=await env.DB.prepare("UPDATE orders SET status='已完成',completed_at=? WHERE id=? AND user_id=? AND status='已发货'")
       .bind(now,orderId,user.id).run();
     if(!result.meta.changes)return json({error:"只有已发货订单可以确认收货"},409);
+    await env.DB.prepare("UPDATE order_fulfillments SET status='已完成',completed_at=? WHERE order_id=?").bind(now,orderId).run();
     return json({ok:true,status:"已完成",completedAt:now});
   }
   if(url.pathname==="/api/merchant/orders"&&request.method==="GET"){
-    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
     if(!user||user.role!=="seller")return json({error:"请使用卖家账户登录"},403);
-    const rows=await env.DB.prepare("SELECT o.id,o.amount,o.items_json itemsJson,o.status,o.created_at createdAt,o.shipped_at shippedAt,o.completed_at completedAt,COALESCE(u.username,'买家') username FROM orders o LEFT JOIN users u ON u.id=o.user_id ORDER BY o.created_at DESC").all();
-    return json(rows.results.map((row:Record<string,unknown>)=>({...row,items:JSON.parse(String(row.itemsJson||"[]"))})));
+    const rows=await env.DB.prepare("SELECT o.id,o.amount,o.items_json itemsJson,f.status,o.created_at createdAt,f.shipped_at shippedAt,f.completed_at completedAt,COALESCE(u.username,'买家') username FROM order_fulfillments f JOIN orders o ON o.id=f.order_id LEFT JOIN users u ON u.id=o.user_id WHERE f.seller_id=? ORDER BY o.created_at DESC").bind(user.id).all();
+    const owned=await env.DB.prepare("SELECT id FROM products WHERE seller_id=?").bind(user.id).all();
+    const ownedIds=new Set(owned.results.map((row:Record<string,unknown>)=>Number(row.id)));
+    return json(rows.results.map((row:Record<string,unknown>)=>{
+      const items=(JSON.parse(String(row.itemsJson||"[]")) as Array<{id:number}>).filter(item=>ownedIds.has(Number(item.id)));
+      const sellerAmount=items.reduce((sum,item:any)=>sum+Number(item.price||0)*Number(item.qty||0),0);
+      return {...row,items,amount:Number(sellerAmount.toFixed(2))};
+    }).filter((row:{items:unknown[]})=>row.items.length));
   }
   if(url.pathname.startsWith("/api/merchant/orders/")&&request.method==="PATCH"){
-    const user=await currentUser(request,env.DB) as {role?:string}|null;
+    const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
     if(!user||user.role!=="seller")return json({error:"请使用卖家账户登录"},403);
     const orderId=decodeURIComponent(url.pathname.split("/").pop()||"");
     const body=await request.json() as {action?:string};
     if(body.action!=="ship")return json({error:"不支持的订单操作"},400);
     const now=new Date().toISOString();
-    const result=await env.DB.prepare("UPDATE orders SET status='已发货',shipped_at=? WHERE id=? AND status='待发货'")
-      .bind(now,orderId).run();
+    const result=await env.DB.prepare("UPDATE order_fulfillments SET status='已发货',shipped_at=? WHERE order_id=? AND seller_id=? AND status='待发货'")
+      .bind(now,orderId,user.id).run();
     if(!result.meta.changes)return json({error:"只有待发货订单可以执行发货"},409);
+    const pending=await env.DB.prepare("SELECT COUNT(*) n FROM order_fulfillments WHERE order_id=? AND status='待发货'").bind(orderId).first<{n:number}>();
+    if(!pending?.n)await env.DB.prepare("UPDATE orders SET status='已发货',shipped_at=? WHERE id=?").bind(now,orderId).run();
     return json({ok:true,status:"已发货",shippedAt:now});
   }
   if(url.pathname==="/api/payments/sandbox"&&request.method==="POST"){
@@ -252,14 +292,14 @@ async function api(request:Request,env:Env,url:URL){
     if(!body.orderId||!Array.isArray(body.items)||!body.items.length)return json({error:"订单信息不完整"},400);
     const normalized=body.items.map(item=>({id:Number(item.id),qty:Number(item.qty)}));
     if(normalized.some(item=>!Number.isInteger(item.id)||!Number.isInteger(item.qty)||item.qty<1||item.qty>99))return json({error:"商品数量无效"},400);
-    const productRows=await env.DB.batch(normalized.map(item=>env.DB.prepare("SELECT id,name,price,stock FROM products WHERE id=?").bind(item.id)));
+    const productRows=await env.DB.batch(normalized.map(item=>env.DB.prepare("SELECT id,name,price,stock,seller_id sellerId FROM products WHERE id=?").bind(item.id)));
     if(productRows.some(result=>!result.results[0]))return json({error:"订单中包含已下架商品"},409);
     let amount=0;
     const storedItems=normalized.map((item,index)=>{
       const product=productRows[index].results[0] as Record<string,unknown>;
       if(Number(product.stock)<item.qty)throw new Error(`${String(product.name)}库存不足`);
       amount+=Number(product.price)*item.qty;
-      return {id:item.id,name:String(product.name),price:Number(product.price),qty:item.qty};
+      return {id:item.id,name:String(product.name),price:Number(product.price),qty:item.qty,sellerId:Number(product.sellerId)||null};
     });
     amount=Number(amount.toFixed(2));
     const transactionId=`${method==="alipay_sandbox"?"ALI":"WX"}-SBX-${Date.now()}-${randomHex(3).toUpperCase()}`;
@@ -271,6 +311,7 @@ async function api(request:Request,env:Env,url:URL){
         .bind(transactionId,body.orderId,user.id,user.username,method,amount,now,now),
       env.DB.prepare("UPDATE users SET points=points+? WHERE id=?").bind(Math.floor(amount),user.id),
       ...normalized.map(item=>env.DB.prepare("UPDATE products SET stock=stock-?,sales=sales+? WHERE id=? AND stock>=?").bind(item.qty,item.qty,item.id,item.qty)),
+      ...[...new Set(storedItems.map(item=>item.sellerId).filter((id):id is number=>Number.isInteger(id)))].map(sellerId=>env.DB.prepare("INSERT OR IGNORE INTO order_fulfillments(order_id,seller_id,status) VALUES(?,?,'待发货')").bind(body.orderId,sellerId)),
     ]);
     const balance=await env.DB.prepare("SELECT points FROM users WHERE id=?").bind(user.id).first<{points:number}>();
     return json({ok:true,orderId:body.orderId,transactionId,status:"支付成功",points:balance?.points||0,paidAt:now},201);
@@ -295,9 +336,9 @@ async function api(request:Request,env:Env,url:URL){
     const dataset=url.pathname.split("/").pop();
     const definitions:Record<string,{sql:string;headers:string[];keys:string[]}>={
       users:{
-        sql:"SELECT id,username,email,phone,points,role,created_at createdAt FROM users ORDER BY created_at DESC",
-        headers:["用户ID","用户名","邮箱","手机号","积分","身份","注册时间"],
-        keys:["id","username","email","phone","points","role","createdAt"],
+        sql:"SELECT id,username,email,phone,points,role,store_name storeName,created_at createdAt FROM users ORDER BY created_at DESC",
+        headers:["用户ID","用户名","邮箱","手机号","积分","身份","店铺名称","注册时间"],
+        keys:["id","username","email","phone","points","role","storeName","createdAt"],
       },
       orders:{
         sql:"SELECT o.id,o.amount,o.items_json itemsJson,o.status,o.payment_method paymentMethod,o.transaction_id transactionId,o.created_at createdAt,o.paid_at paidAt,o.shipped_at shippedAt,o.completed_at completedAt,COALESCE(u.username,'历史/匿名用户') username FROM orders o LEFT JOIN users u ON u.id=o.user_id ORDER BY o.created_at DESC",

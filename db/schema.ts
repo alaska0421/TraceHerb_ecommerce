@@ -7,6 +7,7 @@ export const products = sqliteTable("products", {
   stock: integer("stock").notNull().default(0), sales: integer("sales").notNull().default(0),
   rating: real("rating").notNull().default(5), traceCode: text("trace_code").notNull().unique(),
   badge: text("badge").notNull(), description: text("description").notNull(), icon: text("icon").notNull(),
+  sellerId: integer("seller_id"),
 });
 export const orders = sqliteTable("orders", {
   id: text("id").primaryKey(), amount: real("amount").notNull(),
@@ -14,6 +15,12 @@ export const orders = sqliteTable("orders", {
   createdAt: text("created_at").notNull(), userId: integer("user_id"),
   paymentMethod: text("payment_method"), transactionId: text("transaction_id"),
   paidAt: text("paid_at"), shippedAt: text("shipped_at"), completedAt: text("completed_at"),
+});
+export const orderFulfillments = sqliteTable("order_fulfillments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  orderId: text("order_id").notNull(), sellerId: integer("seller_id").notNull(),
+  status: text("status").notNull().default("待发货"),
+  shippedAt: text("shipped_at"), completedAt: text("completed_at"),
 });
 export const paymentTransactions = sqliteTable("payment_transactions", {
   id: text("id").primaryKey(), orderId: text("order_id").notNull(),
@@ -36,6 +43,7 @@ export const users = sqliteTable("users", {
   passwordSalt: text("password_salt").notNull(),
   points: integer("points").notNull().default(0),
   role: text("role").notNull().default("buyer"),
+  storeName: text("store_name"),
   createdAt: text("created_at").notNull(),
 });
 export const sessions = sqliteTable("sessions", {

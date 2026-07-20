@@ -24,6 +24,17 @@ $env:WRANGLER_LOG_PATH=".wrangler/wrangler.log"; npx.cmd vinext dev
 - 登录会话使用 HttpOnly、SameSite Cookie。
 - 用户、登录会话、商品、订单和积分数据均保存在 D1 数据库中。
 
+## 多商家演示账户
+
+系统首次运行会创建四个仅供毕业项目展示的卖家账户，并把 18 件初始商品按 3 / 4 / 5 / 6 分配。四个账户的演示密码均为 `Merchant2026!`：
+
+- `qinghe_store`：清和本草旗舰店（3 件）
+- `shanye_store`：山野参茸旗舰店（4 件）
+- `yunling_store`：云岭药材旗舰店（5 件）
+- `sishi_store`：四时茶养旗舰店（6 件）
+
+卖家只能查看和编辑本店商品；订单会按商品所属店铺拆分，本店只能看到自己的商品明细、应收金额和发货状态。公开部署前必须修改或移除这些演示账户。
+
 ## 主要目录
 
 - `app/`：页面、交互和样式

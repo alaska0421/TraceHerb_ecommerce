@@ -45,6 +45,8 @@ const demoMerchants = [
   {username:"yunling_store",email:"yunling@traceherb.demo",phone:"13900007003",shopName:"云岭药材旗舰店",productIds:[4,9,13,14,16]},
   {username:"sishi_store",email:"sishi@traceherb.demo",phone:"13900007004",shopName:"四时茶养旗舰店",productIds:[3,6,8,12,15,18]},
 ];
+const demoMerchantSalt="traceherb-demo-2026";
+const demoMerchantPasswordHash="ffba9d1d5d1b6f055f7a823db5e2ead14193e0b4d83fa13cc8e785735dc4c39b";
 
 async function ensureDb(db:D1Database){
   await db.batch([
@@ -120,12 +122,12 @@ async function ensureDemoMerchants(db:D1Database){
   for(const merchant of demoMerchants){
     let user=await db.prepare("SELECT id FROM users WHERE username=?").bind(merchant.username).first<{id:number}>();
     if(!user){
-      const salt=randomHex(16);
       const created=await db.prepare("INSERT INTO users(username,email,phone,password_hash,password_salt,points,role,shop_name,created_at) VALUES(?,?,?,?,?,0,'seller',?,?)")
-        .bind(merchant.username,merchant.email,merchant.phone,await hashPassword("Merchant2026!",salt),salt,merchant.shopName,new Date().toISOString()).run();
+        .bind(merchant.username,merchant.email,merchant.phone,demoMerchantPasswordHash,demoMerchantSalt,merchant.shopName,new Date().toISOString()).run();
       user={id:Number(created.meta.last_row_id)};
     }else{
-      await db.prepare("UPDATE users SET role='seller',shop_name=? WHERE id=? AND (role<>'seller' OR shop_name IS NOT ?)").bind(merchant.shopName,user.id,merchant.shopName).run();
+      await db.prepare("UPDATE users SET role='seller',shop_name=?,password_hash=?,password_salt=? WHERE id=? AND (role<>'seller' OR shop_name IS NOT ? OR password_hash IS NOT ? OR password_salt IS NOT ?)")
+        .bind(merchant.shopName,demoMerchantPasswordHash,demoMerchantSalt,user.id,merchant.shopName,demoMerchantPasswordHash,demoMerchantSalt).run();
     }
     const placeholders=merchant.productIds.map(()=>"?").join(",");
     await db.prepare(`UPDATE products SET merchant_id=? WHERE id IN (${placeholders}) AND merchant_id IS NOT ?`).bind(user.id,...merchant.productIds,user.id).run();

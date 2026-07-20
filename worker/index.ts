@@ -46,6 +46,23 @@ const seedSellers = [
   {username:"seller_baicao",email:"baicao@traceherb.demo",phone:"19910001004",password:"BcTrace2026!",storeName:"百草堂",productIds:[13,14,15,16,17,18]},
 ];
 
+const traceStepCount=6;
+function seededTraceDates(id:number){
+  const start=new Date(Date.UTC(2025,Math.floor((id-1)/3),2+((id*3)%18)));
+  return Array.from({length:traceStepCount},(_,index)=>{
+    const date=new Date(start);
+    date.setUTCDate(start.getUTCDate()+index*(8+(id%4)));
+    return date.toISOString().slice(0,10);
+  });
+}
+function validTraceDates(value:unknown){
+  if(!Array.isArray(value)||value.length!==traceStepCount)return null;
+  const dates=value.map(x=>String(x));
+  if(dates.some(x=>!/^\d{4}-\d{2}-\d{2}$/.test(x)))return null;
+  if(dates.some((x,index)=>index>0&&x<dates[index-1]))return null;
+  return dates;
+}
+
 async function ensureDb(db:D1Database){
   await db.batch([
     db.prepare("CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT NOT NULL,origin TEXT NOT NULL,price REAL NOT NULL,stock INTEGER NOT NULL DEFAULT 0,sales INTEGER NOT NULL DEFAULT 0,rating REAL NOT NULL DEFAULT 5,trace_code TEXT NOT NULL UNIQUE,badge TEXT NOT NULL,description TEXT NOT NULL,icon TEXT NOT NULL)"),
@@ -63,6 +80,8 @@ async function ensureDb(db:D1Database){
   if(!storeNameColumn)await db.prepare("ALTER TABLE users ADD COLUMN store_name TEXT").run();
   const sellerIdColumn=await db.prepare("SELECT name FROM pragma_table_info('products') WHERE name='seller_id'").first();
   if(!sellerIdColumn)await db.prepare("ALTER TABLE products ADD COLUMN seller_id INTEGER").run();
+  const traceDatesColumn=await db.prepare("SELECT name FROM pragma_table_info('products') WHERE name='trace_dates'").first();
+  if(!traceDatesColumn)await db.prepare("ALTER TABLE products ADD COLUMN trace_dates TEXT").run();
   const eventDateColumn=await db.prepare("SELECT name FROM pragma_table_info('point_events') WHERE name='event_date'").first();
   if(!eventDateColumn)await db.prepare("ALTER TABLE point_events ADD COLUMN event_date TEXT").run();
   for(const [name,sql] of [
@@ -93,6 +112,13 @@ async function ensureDb(db:D1Database){
     }
     const placeholders=seller.productIds.map(()=>"?").join(",");
     await db.prepare(`UPDATE products SET seller_id=? WHERE id IN (${placeholders})`).bind(account.id,...seller.productIds).run();
+  }
+  const missingTraceDates=await db.prepare("SELECT id FROM products WHERE trace_dates IS NULL OR trace_dates=''").all();
+  if(missingTraceDates.results.length){
+    await db.batch(missingTraceDates.results.map((row:Record<string,unknown>)=>{
+      const id=Number(row.id);
+      return db.prepare("UPDATE products SET trace_dates=? WHERE id=?").bind(JSON.stringify(seededTraceDates(id)),id);
+    }));
   }
   await db.prepare("UPDATE users SET store_name=username||'的店铺' WHERE role='seller' AND (store_name IS NULL OR trim(store_name)='')").run();
   await db.prepare("INSERT OR IGNORE INTO order_fulfillments(order_id,seller_id,status,shipped_at,completed_at) SELECT DISTINCT o.id,p.seller_id,o.status,o.shipped_at,o.completed_at FROM orders o JOIN json_each(o.items_json) j JOIN products p ON p.id=CAST(json_extract(j.value,'$.id') AS INTEGER) WHERE p.seller_id IS NOT NULL").run();
@@ -194,16 +220,18 @@ async function api(request:Request,env:Env,url:URL){
     return new Response(JSON.stringify({ok:true}),{headers:{"content-type":"application/json","set-cookie":sessionCookie(request,"",0)}});
   }
   if(url.pathname==="/api/products"&&request.method==="GET"){
-    const rows=await env.DB.prepare("SELECT p.id,p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.trace_code traceCode,p.badge,p.description,p.icon,p.seller_id sellerId,COALESCE(u.store_name,'平台自营') storeName FROM products p LEFT JOIN users u ON u.id=p.seller_id ORDER BY p.id").all();
-    return json(rows.results);
+    const rows=await env.DB.prepare("SELECT p.id,p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.trace_code traceCode,p.badge,p.description,p.icon,p.seller_id sellerId,p.trace_dates traceDates,COALESCE(u.store_name,'平台自营') storeName FROM products p LEFT JOIN users u ON u.id=p.seller_id ORDER BY p.id").all();
+    return json(rows.results.map((row:Record<string,unknown>)=>({...row,traceDates:JSON.parse(String(row.traceDates||"[]"))})));
   }
   if(url.pathname==="/api/products"&&request.method==="POST"){
     const user=await currentUser(request,env.DB) as {id?:number;role?:string}|null;
     if(!user||!["seller","admin"].includes(user.role||""))return json({error:"无权发布商品"},403);
     const p=await request.json() as Record<string,unknown>;
+    const traceDates=validTraceDates(p.traceDates);
+    if(!traceDates)return json({error:"请完整填写六个溯源日期，并确保日期按流程先后排列"},400);
     const sellerId=user.role==="seller"?user.id:Number(p.sellerId)||null;
-    const result=await env.DB.prepare("INSERT INTO products(name,category,origin,price,stock,sales,rating,trace_code,badge,description,icon,seller_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.traceCode,p.badge,p.description,p.icon,sellerId).run();
+    const result=await env.DB.prepare("INSERT INTO products(name,category,origin,price,stock,sales,rating,trace_code,badge,description,icon,seller_id,trace_dates) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.traceCode,p.badge,p.description,p.icon,sellerId,JSON.stringify(traceDates)).run();
     return json({ok:true,id:result.meta.last_row_id},201);
   }
   if(url.pathname.startsWith("/api/products/")&&request.method==="PATCH"){
@@ -219,15 +247,17 @@ async function api(request:Request,env:Env,url:URL){
     const badge=String(body.badge||"").trim();
     const price=Number(body.price);
     const stock=Number(body.stock);
+    const traceDates=validTraceDates(body.traceDates);
     if(!name||!category||!origin||!description||!badge||!Number.isFinite(price)||price<=0||!Number.isInteger(stock)||stock<0){
       return json({error:"请完整填写有效的商品信息"},400);
     }
+    if(!traceDates)return json({error:"请完整填写六个溯源日期，并确保日期按流程先后排列"},400);
     const result=user.role==="admin"
-      ?await env.DB.prepare("UPDATE products SET name=?,category=?,origin=?,price=?,stock=?,badge=?,description=? WHERE id=?").bind(name,category,origin,price,stock,badge,description,id).run()
-      :await env.DB.prepare("UPDATE products SET name=?,category=?,origin=?,price=?,stock=?,badge=?,description=? WHERE id=? AND seller_id=?").bind(name,category,origin,price,stock,badge,description,id,user.id).run();
+      ?await env.DB.prepare("UPDATE products SET name=?,category=?,origin=?,price=?,stock=?,badge=?,description=?,trace_dates=? WHERE id=?").bind(name,category,origin,price,stock,badge,description,JSON.stringify(traceDates),id).run()
+      :await env.DB.prepare("UPDATE products SET name=?,category=?,origin=?,price=?,stock=?,badge=?,description=?,trace_dates=? WHERE id=? AND seller_id=?").bind(name,category,origin,price,stock,badge,description,JSON.stringify(traceDates),id,user.id).run();
     if(!result.meta.changes)return json({error:"商品不存在"},404);
-    const product=await env.DB.prepare("SELECT p.id,p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.trace_code traceCode,p.badge,p.description,p.icon,p.seller_id sellerId,COALESCE(u.store_name,'平台自营') storeName FROM products p LEFT JOIN users u ON u.id=p.seller_id WHERE p.id=?").bind(id).first();
-    return json({ok:true,product});
+    const product=await env.DB.prepare("SELECT p.id,p.name,p.category,p.origin,p.price,p.stock,p.sales,p.rating,p.trace_code traceCode,p.badge,p.description,p.icon,p.seller_id sellerId,p.trace_dates traceDates,COALESCE(u.store_name,'平台自营') storeName FROM products p LEFT JOIN users u ON u.id=p.seller_id WHERE p.id=?").bind(id).first<Record<string,unknown>>();
+    return json({ok:true,product:product?{...product,traceDates:JSON.parse(String(product.traceDates||"[]"))}:null});
   }
   if(url.pathname.startsWith("/api/products/")&&request.method==="DELETE"){
     const user=await currentUser(request,env.DB) as {role?:string}|null;

@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS products (
  origin TEXT NOT NULL, price REAL NOT NULL, stock INTEGER NOT NULL DEFAULT 0,
  sales INTEGER NOT NULL DEFAULT 0, rating REAL NOT NULL DEFAULT 5,
  trace_code TEXT NOT NULL UNIQUE, badge TEXT NOT NULL, description TEXT NOT NULL, icon TEXT NOT NULL,
- seller_id INTEGER
+ seller_id INTEGER, trace_dates TEXT
 );
 CREATE TABLE IF NOT EXISTS orders (
  id TEXT PRIMARY KEY, amount REAL NOT NULL, items_json TEXT NOT NULL,

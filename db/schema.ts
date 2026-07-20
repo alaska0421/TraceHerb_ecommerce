@@ -8,6 +8,7 @@ export const products = sqliteTable("products", {
   rating: real("rating").notNull().default(5), traceCode: text("trace_code").notNull().unique(),
   badge: text("badge").notNull(), description: text("description").notNull(), icon: text("icon").notNull(),
   sellerId: integer("seller_id"),
+  traceDates: text("trace_dates"),
 });
 export const orders = sqliteTable("orders", {
   id: text("id").primaryKey(), amount: real("amount").notNull(),

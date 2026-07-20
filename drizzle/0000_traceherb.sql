@@ -2,7 +2,8 @@ CREATE TABLE IF NOT EXISTS products (
  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT NOT NULL,
  origin TEXT NOT NULL, price REAL NOT NULL, stock INTEGER NOT NULL DEFAULT 0,
  sales INTEGER NOT NULL DEFAULT 0, rating REAL NOT NULL DEFAULT 5,
- trace_code TEXT NOT NULL UNIQUE, badge TEXT NOT NULL, description TEXT NOT NULL, icon TEXT NOT NULL
+ trace_code TEXT NOT NULL UNIQUE, badge TEXT NOT NULL, description TEXT NOT NULL, icon TEXT NOT NULL,
+ merchant_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS orders (
  id TEXT PRIMARY KEY, amount REAL NOT NULL, items_json TEXT NOT NULL,
@@ -26,7 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
  email TEXT NOT NULL UNIQUE, phone TEXT NOT NULL UNIQUE,
  password_hash TEXT NOT NULL, password_salt TEXT NOT NULL,
- points INTEGER NOT NULL DEFAULT 0, role TEXT NOT NULL DEFAULT 'buyer', created_at TEXT NOT NULL
+ points INTEGER NOT NULL DEFAULT 0, role TEXT NOT NULL DEFAULT 'buyer', shop_name TEXT, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
  token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
@@ -34,3 +35,10 @@ CREATE TABLE IF NOT EXISTS sessions (
  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS products_merchant_id_idx ON products(merchant_id);
+CREATE TABLE IF NOT EXISTS merchant_order_status (
+ order_id TEXT NOT NULL, merchant_id INTEGER NOT NULL, amount REAL NOT NULL,
+ status TEXT NOT NULL DEFAULT '待发货', shipped_at TEXT, completed_at TEXT,
+ PRIMARY KEY(order_id,merchant_id)
+);
+CREATE INDEX IF NOT EXISTS merchant_order_status_merchant_idx ON merchant_order_status(merchant_id,status);
